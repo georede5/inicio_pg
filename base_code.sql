@@ -4,214 +4,125 @@
 -- INSERT TRIGGER nas LINHAS
 -- ############################################################################
 
-CREATE FUNCTION base.linhas_insert()
-    RETURNS trigger
-    LANGUAGE 'plpgsql'
-    COST 100
-    VOLATILE NOT LEAKPROOF
-AS $BODY$
-	DECLARE
-		v_start geometry;
-		v_end geometry;
-		v_testpt geometry;
-		v_tol numeric;
-		v_rec record;
-		v_node_count integer;
-		v_srid integer;
-		v_node_gid uuid;
-	BEGIN
-		-- Registar utilizador responsável pela criação do elemento
-		NEW.utilizador := current_user;
-		
-		-- Obter tolerancia de pesquisa de proximidade entre elementos
-		SELECT valor::NUMERIC into v_tol
-		FROM base.config
-		where parametro = 'TOLERANCIA';
+CREATE OR REPLACE FUNCTION base.linhas_insert()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+	v_start geometry;
+	v_end geometry;
+	v_testpt geometry;
+	v_tol numeric;
+	v_rec1 record;
+	v_rec2 record;
+	v_rec0 record;
+	v_node_count integer;
+	v_srid integer;
+	v_node_gid uuid;
+BEGIN
+	-- Registar utilizador responsável pela criação do elemento
+	NEW.utilizador := current_user;
+	
+	-- Obter tolerancia de pesquisa de proximidade entre elementos
+	SELECT valor::NUMERIC into v_tol
+	FROM base.config
+	where parametro = 'TOLERANCIA';
 
-		SELECT valor::int into v_srid
-		FROM base.config
-		where parametro = 'SRID';
+	SELECT valor::int into v_srid
+	FROM base.config
+	where parametro = 'SRID';
 
-		-- Obter os pontos inicial e final da nova linha
-		select ST_StartPoint(NEW.geom) Into v_start;
-		select ST_EndPoint(NEW.geom) Into v_end;
+	-- Obter os pontos inicial e final da nova linha
+	select ST_StartPoint(NEW.geom) Into v_start;
+	select ST_EndPoint(NEW.geom) Into v_end;
+
+	-- Comprimento da nova linha tem de ser,
+	--	no mínimo, o dobro da tolerância
+	if ST_Length(NEW.geom) < 2.0 * v_tol then
+		return null;
+	end if;
+
+	-- loop entre ponto inicial e final
+	for v_rec0 in (			
+		with presel2 as (
+			select 0 ord, v_start geom
+			union
+			select 1 ord, v_end geom
+		)
+		select ord, geom from presel2
+		order by ord
+	) loop
 		
-		-- Encontrar linhas proximas do ponto inicial
-		for v_rec in (
+		-- Encontrar linhas proximas do ponto corrente (inicial ou final)
+		for v_rec1 in (
 			select gid, geom
 			from base.linhas l
-			where st_DWithin(l.geom, v_start, v_tol)
+			where ST_DWithin(l.geom, v_rec0.geom, v_tol)
 			and ST_Length(geom) > v_tol
 		) loop
-			-- Obter o ponto inicial da linha proxima encontrada
-			select ST_StartPoint(v_rec.geom) into v_testpt;
+	
+			-- loop entre ponto inicial e final de cada linha proxima encontrada
+			for v_rec2 in (			
+				with presel1 as (
+					select 0 ord, ST_StartPoint(v_rec1.geom) geom
+					union
+					select 1 ord, ST_EndPoint(v_rec1.geom) geom
+				)
+				select ord, geom from presel1
+				order by ord
+			) loop
 
-			v_node_gid := null;
-			select gid into v_node_gid
-			from base.nos n
-			where st_DWithin(n.geom, v_testpt, v_tol)
-			LIMIT 1;
+				-- Obter os pontos inicial e final da linha proxima encontrada
+				v_testpt := v_rec2.geom;
+				v_node_gid := null;
+			
+				select gid into v_node_gid
+				from base.nos n
+				where st_DWithin(n.geom, v_testpt, v_tol)
+				LIMIT 1;
+			
+				-- Se ambos os pontos forem proximos ...
+				if st_distance(v_testpt, v_rec0.geom) < v_tol then
 				
-			-- Se ambos os pontos iniciais forem proximos ...
-			if st_distance(v_testpt, v_start) < v_tol then
-			
-				-- Ajustar o ponto inicial para cima do inicio da linha proxima
-				NEW.geom := ST_SetSRID(ST_SetPoint(NEW.geom, 0, v_testpt), v_srid);
-			
-				if not v_node_gid is null then
-					begin
-						insert into base.nos_linhas
-						(no_gid, linha_gid, ordem)
-						values (v_node_gid, NEW.gid, 0);
-					exception
-						when unique_violation then
-							null;
-					end;
-				ELSE
-					insert into base.nos
-					(geom) values (v_testpt)
-					returning gid into v_node_gid;
-					
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, NEW.gid, 0);
-				end if;
+					-- Ajustar o ponto correspondente da nova linha  para cima do ponto da linha proxima a ser testado
+					NEW.geom := ST_SetSRID(ST_SetPoint(NEW.geom, v_rec0.ord, v_testpt), v_srid);
 
-				-- garantir que a outra linha esta representad na tabela de ligacao
-				begin
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, v_rec.gid, 0);
-				exception
-					when unique_violation then
-						null;
-				end;
-
-			end if;
-
-			-- Se ambos o pontos final da nova e o inical da outra forem proximos ...
-			if st_distance(v_testpt, v_end) < v_tol then
-
-				-- Ajustar o ponto final para cima do inicio da linha proxima
-				NEW.geom := ST_SetSRID(ST_SetPoint(NEW.geom, 1, v_testpt), v_srid);
-
-				if not v_node_gid is null then
-					begin
-						insert into base.nos_linhas
-						(no_gid, linha_gid, ordem)
-						values (v_node_gid, NEW.gid, 1);
-					exception
-						when unique_violation then
-							null;
-					end;
-				ELSE
-					insert into base.nos
-					(geom) values (v_testpt)
-					returning gid into v_node_gid;
-					
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, NEW.gid, 1);
-				end if;
+					if v_node_gid is null then
+						insert into base.nos
+						(geom) values (v_testpt)
+						returning gid into v_node_gid;
+					end if;
 				
-				-- garantir que a outra linha esta representad na tabela de ligacao
-				begin
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, v_rec.gid, 0);
-				exception
-					when unique_violation then
-						null;
-				end;				
-			end if;
+					-- popular tabela de ligacao ente no corrente (possivelmente acabado de criar) e a nova linhas
+					begin
+						insert into base.nos_linhas
+						(no_gid, linha_gid, ordem)
+						values (v_node_gid, NEW.gid, v_rec0.ord);
+					exception
+						when unique_violation then
+							null;
+					end;
 
-			-- Obter o ponto final da linha proxima encontrada
-			select ST_EndPoint(v_rec.geom) into v_testpt;
+					-- garantir que a outra linha esta representada na tabela de ligacao
+					begin
+						insert into base.nos_linhas
+						(no_gid, linha_gid, ordem)
+						values (v_node_gid, v_rec1.gid, v_rec2.ord);
+					exception
+						when unique_violation then
+							null;
+					end;
 
-			v_node_gid := null;
-			select gid into v_node_gid
-			from base.nos n
-			where st_DWithin(n.geom, v_testpt, v_tol)
-			LIMIT 1;
+				end if; -- st_distance(v_testpt, v_rec3.geom) < v_tol 
 				
-			-- Se ponto final da proxima e o inicio desta forem proximos ...
-			if st_distance(v_testpt, v_start) < v_tol then
-			
-				-- Ajustar o ponto inicial para cima do inicio da linha proxima
-				NEW.geom := ST_SetSRID(ST_SetPoint(NEW.geom, 0, v_testpt), v_srid);
-			
-				if not v_node_gid is null then
-					begin
-						insert into base.nos_linhas
-						(no_gid, linha_gid, ordem)
-						values (v_node_gid, NEW.gid, 0);
-					exception
-						when unique_violation then
-							null;
-					end;
-				ELSE
-					insert into base.nos
-					(geom) values (v_testpt)
-					returning gid into v_node_gid;
-					
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, NEW.gid, 0);
-				end if;
+			end loop; -- v_rec2
 
-				-- garantir que a outra linha esta representad na tabela de ligacao
-				begin
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, v_rec.gid, 1);
-				exception
-					when unique_violation then
-						null;
-				end;				
+		end loop; -- v_rec1
 
-			end if;
-			
-			if st_distance(v_testpt, v_end) < v_tol then
+	end loop; -- v_rec0
+		
+RETURN NEW;
+END;
+$function$;
 
-				-- Ajustar o ponto final para cima do inicio da linha proxima
-				NEW.geom := ST_SetSRID(ST_SetPoint(NEW.geom, 1, v_testpt), v_srid);
-
-				if not v_node_gid is null then
-					begin
-						insert into base.nos_linhas
-						(no_gid, linha_gid, ordem)
-						values (v_node_gid, NEW.gid, 1);
-					exception
-						when unique_violation then
-							null;
-					end;
-				ELSE
-					insert into base.nos
-					(geom) values (v_testpt)
-					returning gid into v_node_gid;
-					
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, NEW.gid, 1);
-				end if;
-
-				-- garantir que a outra linha esta representad na tabela de ligacao
-				begin
-					insert into base.nos_linhas
-					(no_gid, linha_gid, ordem)
-					values (v_node_gid, v_rec.gid, 1);
-				exception
-					when unique_violation then
-						null;
-				end;				
-
-			end if;
-
-		end loop;
-
-	RETURN NEW;
-	END;
-	$BODY$;
-
-ALTER FUNCTION base.linhas_insert()
-    OWNER TO georede5;
+ALTER FUNCTION base.linhas_insert() OWNER TO georede5;

@@ -22,15 +22,14 @@ ALTER TABLE base.config
 -- Tabela genérica de LINHAS em PT-TM06 ETRS89
 -- ############################################################################
 
-CREATE TABLE base.linhas
-(
-    gid uuid NOT NULL DEFAULT uuid_generate_v4(),
-    geom geometry(LineString,3763) NOT NULL,
-    utilizador character varying(64) COLLATE pg_catalog."default",
-    CONSTRAINT linhas_pkey PRIMARY KEY (gid)
-        USING INDEX TABLESPACE georede5
+CREATE TABLE base.linhas (
+	gid uuid NOT NULL DEFAULT uuid_generate_v4(),
+	geom geometry(LINESTRING, 3763) NOT NULL,
+	utilizador varchar(64) NULL,
+	estado uuid NULL,
+	bloqueio uuid NULL,
+	CONSTRAINT linhas_pkey PRIMARY KEY (gid)
 )
-
 TABLESPACE georede5;
 
 ALTER TABLE base.linhas
@@ -57,7 +56,6 @@ CREATE TABLE base.nos
     CONSTRAINT nos_pkey PRIMARY KEY (gid)
         USING INDEX TABLESPACE georede5
 )
-
 TABLESPACE georede5;
 
 ALTER TABLE base.nos
