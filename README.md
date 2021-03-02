@@ -8,3 +8,6 @@ Tentativa de desenvolvimento de um modelo genérico de dados, em português para
 Repositório inicial para as primeiras explorações.
 
 Criado em Jan 2021
+
+
+![Diagrama E-R](inicio_pg/erd1.png)
