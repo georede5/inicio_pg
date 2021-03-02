@@ -10,4 +10,4 @@ Repositório inicial para as primeiras explorações.
 Criado em Jan 2021
 
 
-![Diagrama E-R](inicio_pg/erd1.png)
+![Diagrama E-R](erd1.png)
